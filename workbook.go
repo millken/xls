@@ -3,13 +3,115 @@ package xls
 import (
 	"bytes"
 	"encoding/binary"
-	"golang.org/x/text/encoding/charmap"
+	"fmt"
 	"io"
-	"os"
 	"unicode/utf16"
+
+	"golang.org/x/text/encoding/charmap"
 )
 
-//xls workbook type
+// BIFF structures
+type bof struct {
+	Id   uint16
+	Size uint16
+}
+
+func (b *bof) utf16String(buf io.ReadSeeker, count uint32) string {
+	var bts = make([]uint16, count)
+	binary.Read(buf, binary.LittleEndian, &bts)
+	runes := utf16.Decode(bts[:len(bts)-1])
+	return string(runes)
+}
+
+type biffHeader struct {
+	Ver     uint16
+	Type    uint16
+	Id_make uint16
+	Year    uint16
+	Flags   uint32
+	Min_ver uint32
+}
+
+// boundsheet represents sheet info
+type boundsheet struct {
+	Filepos uint32
+	Visible byte
+	Type    byte
+	Name    byte
+}
+
+// Font info structures
+type FontInfo struct {
+	Height     uint16
+	Flag       uint16
+	Color      uint16
+	Bold       uint16
+	Escapement uint16
+	Underline  byte
+	Family     byte
+	Charset    byte
+	Notused    byte
+	NameB      byte
+}
+
+type Font struct {
+	Info *FontInfo
+	Name string
+}
+
+// Format structure
+type Format struct {
+	Head struct {
+		Index uint16
+		Size  uint16
+	}
+	str string
+}
+
+// SST info structure
+type SstInfo struct {
+	Total uint32
+	Count uint32
+}
+
+// XF structures for cell formatting
+type Xf5 struct {
+	Font      uint16
+	Format    uint16
+	Type      uint16
+	Align     uint16
+	Color     uint16
+	Fill      uint16
+	Border    uint16
+	Linestyle uint16
+}
+
+func (x *Xf5) formatNo() uint16 {
+	return x.Format
+}
+
+type Xf8 struct {
+	Font        uint16
+	Format      uint16
+	Type        uint16
+	Align       byte
+	Rotation    byte
+	Ident       byte
+	Usedattr    byte
+	Linestyle   uint32
+	Linecolor   uint32
+	Groundcolor uint16
+}
+
+func (x *Xf8) formatNo() uint16 {
+	return x.Format
+}
+
+type st_xf_data interface {
+	formatNo() uint16
+}
+
+// WorkBook represents an xls workbook
 type WorkBook struct {
 	Is5ver   bool
 	Type     uint16
@@ -28,11 +130,10 @@ type WorkBook struct {
 	dateMode       uint16
 }
 
-//read workbook from ole2 file
+// read workbook from ole2 file
 func newWorkBookFromOle2(rs io.ReadSeeker) *WorkBook {
 	wb := new(WorkBook)
 	wb.Formats = make(map[uint16]*Format)
-	// wb.bts = bts
 	wb.rs = rs
 	wb.sheets = make([]*WorkSheet, 0)
 	wb.Parse(rs)
@@ -42,7 +143,6 @@ func newWorkBookFromOle2(rs io.ReadSeeker) *WorkBook {
 func (w *WorkBook) Parse(buf io.ReadSeeker) {
 	b := new(bof)
 	bof_pre := new(bof)
-	// buf := bytes.NewReader(bts)
 	offset := 0
 	for {
 		if err := binary.Read(buf, binary.LittleEndian, b); err == nil {
@@ -64,7 +164,8 @@ func (w *WorkBook) addFont(font *FontInfo, buf io.ReadSeeker) {
 
 func (w *WorkBook) addFormat(format *Format) {
 	if w.Formats == nil {
-		os.Exit(1)
+		fmt.Printf("Warning: Formats map is nil, cannot add format with index %d\n", format.Head.Index)
+		return
 	}
 	w.Formats[format.Head.Index] = format
 }
@@ -117,7 +218,6 @@ func (wb *WorkBook) parseBof(buf io.ReadSeeker, b *bof, pre *bof, offset_pre int
 		wb.sst = make([]string, info.Count)
 		var size uint16
 		var i = 0
-		// dont forget to initialize offset
 		offset = 0
 		for ; i < int(info.Count); i++ {
 			var err error
@@ -136,7 +236,6 @@ func (wb *WorkBook) parseBof(buf io.ReadSeeker, b *bof, pre *bof, offset_pre int
 	case 0x85: // boundsheet
 		var bs = new(boundsheet)
 		binary.Read(buf_item, binary.LittleEndian, bs)
-		// different for BIFF5 and BIFF8
 		wb.addSheet(bs, buf_item)
 	case 0x0e0: // XF
 		if wb.Is5ver {
@@ -162,17 +261,18 @@ func (wb *WorkBook) parseBof(buf io.ReadSeeker, b *bof, pre *bof, offset_pre int
 	}
 	return
 }
+
 func decodeWindows1251(enc []byte) string {
 	dec := charmap.Windows1251.NewDecoder()
 	out, _ := dec.Bytes(enc)
 	return string(out)
 }
+
 func (w *WorkBook) get_string(buf io.ReadSeeker, size uint16) (res string, err error) {
 	if w.Is5ver {
 		var bts = make([]byte, size)
 		_, err = buf.Read(bts)
 		res = decodeWindows1251(bts)
-		//res = string(bts)
 	} else {
 		var richtext_num = uint16(0)
 		var phonetic_size = uint32(0)
@@ -197,7 +297,6 @@ func (w *WorkBook) get_string(buf io.ReadSeeker, size uint16) (res string, err e
 				err = binary.Read(buf, binary.LittleEndian, &bts[i])
 			}
 
-			// when eof found, we dont want to append last element
 			var runes []rune
 			if err == io.EOF {
 				i = i - 1
@@ -238,8 +337,6 @@ func (w *WorkBook) get_string(buf io.ReadSeeker, size uint16) (res string, err e
 			if err == io.EOF {
 				w.continue_rich = richtext_num
 			}
-
-			// err = binary.Read(buf, binary.LittleEndian, bts)
 		}
 		if phonetic_size > 0 {
 			var bts []byte
@@ -258,13 +355,13 @@ func (w *WorkBook) addSheet(sheet *boundsheet, buf io.ReadSeeker) {
 	w.sheets = append(w.sheets, &WorkSheet{bs: sheet, Name: name, wb: w, Visibility: TWorkSheetVisibility(sheet.Visible)})
 }
 
-//reading a sheet from the compress file to memory, you should call this before you try to get anything from sheet
+// reading a sheet from the compress file to memory, you should call this before you try to get anything from sheet
 func (w *WorkBook) prepareSheet(sheet *WorkSheet) {
 	w.rs.Seek(int64(sheet.bs.Filepos), 0)
 	sheet.parse(w.rs)
 }
 
-//Get one sheet by its number
+// Get one sheet by its number
 func (w *WorkBook) GetSheet(num int) *WorkSheet {
 	if num < len(w.sheets) {
 		s := w.sheets[num]
@@ -272,19 +369,18 @@ func (w *WorkBook) GetSheet(num int) *WorkSheet {
 			w.prepareSheet(s)
 		}
 		return s
-	} else {
-		return nil
 	}
+	return nil
 }
 
-//Get the number of all sheets, look into example
+// Get the number of all sheets, look into example
 func (w *WorkBook) NumSheets() int {
 	return len(w.sheets)
 }
 
-//helper function to read all cells from file
-//Notice: the max value is the limit of the max capacity of lines.
-//Warning: the helper function will need big memeory if file is large.
+// helper function to read all cells from file
+// Notice: the max value is the limit of the max capacity of lines.
+// Warning: the helper function will need big memory if file is large.
 func (w *WorkBook) ReadAllCells(max int) (res [][]string) {
 	res = make([][]string, 0)
 	for _, sheet := range w.sheets {

@@ -1,8 +1,5 @@
-module github.com/extrame/xls
+module github.com/millken/xls
 
-go 1.20
+go 1.24.0
 
-require (
-	github.com/extrame/goyymmdd v0.0.0-20210114090516-7cc815f00d1a
-	golang.org/x/text v0.30.0
-)
+require golang.org/x/text v0.30.0
