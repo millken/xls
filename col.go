@@ -5,13 +5,67 @@ import (
 	"math"
 	"strconv"
 	"strings"
-
 	"time"
-
-	yymmdd "github.com/extrame/goyymmdd"
 )
 
-//content type
+// Ranger interface for multi-row ranges
+type Ranger interface {
+	FirstRow() uint16
+	LastRow() uint16
+}
+
+// CellRange represents a range of cells in multi rows
+type CellRange struct {
+	FirstRowB uint16
+	LastRowB  uint16
+	FristColB uint16
+	LastColB  uint16
+}
+
+func (c *CellRange) FirstRow() uint16 {
+	return c.FirstRowB
+}
+
+func (c *CellRange) LastRow() uint16 {
+	return c.LastRowB
+}
+
+func (c *CellRange) FirstCol() uint16 {
+	return c.FristColB
+}
+
+func (c *CellRange) LastCol() uint16 {
+	return c.LastColB
+}
+
+// HyperLink represents a hyperlink cell
+type HyperLink struct {
+	CellRange
+	Description      string
+	TextMark         string
+	TargetFrame      string
+	Url              string
+	ShortedFilePath  string
+	ExtendedFilePath string
+	IsUrl            bool
+}
+
+func (h *HyperLink) String(wb *WorkBook) []string {
+	res := make([]string, h.LastColB-h.FristColB+1)
+	var str string
+	if h.IsUrl {
+		str = fmt.Sprintf("%s(%s)", h.Description, h.Url)
+	} else {
+		str = h.ExtendedFilePath
+	}
+
+	for i := uint16(0); i < h.LastColB-h.FristColB+1; i++ {
+		res[i] = str
+	}
+	return res
+}
+
+// content type
 type contentHandler interface {
 	String(*WorkBook) []string
 	FirstCol() uint16
@@ -75,7 +129,7 @@ func (xf *XfRk) String(wb *WorkBook) string {
 						f = float64(i)
 					}
 					t := timeFromExcelTime(f, wb.dateMode == 1)
-					return yymmdd.Format(t, formatter.str)
+					return formatExcelTime(t, formatter.str)
 				}
 			}
 			// see http://www.openoffice.org/sc/excelfileformat.pdf Page #174
@@ -175,11 +229,76 @@ func (c *NumberCol) String(wb *WorkBook) []string {
 		if fNo := wb.Xfs[c.Index].formatNo(); fNo != 0 {
 			t := timeFromExcelTime(c.Float, wb.dateMode == 1)
 			if fmtObj := wb.Formats[fNo]; fmtObj != nil {
-				return []string{yymmdd.Format(t, fmtObj.str)}
+				return []string{formatExcelTime(t, fmtObj.str)}
 			}
 		}
 	}
 	return []string{strconv.FormatFloat(c.Float, 'f', -1, 64)}
+}
+
+// formatExcelTime formats time according to Excel format string
+// Supports common Excel date/time format patterns
+func formatExcelTime(t time.Time, format string) string {
+	// Convert Excel format to Go format
+	goFormat := convertExcelFormatToGo(format)
+	return t.Format(goFormat)
+}
+
+// convertExcelFormatToGo converts Excel date/time format to Go format
+func convertExcelFormatToGo(excelFormat string) string {
+	// Map common Excel format patterns to Go format
+	result := excelFormat
+
+	// Handle minute patterns first (before month) - only when preceded by :
+	// Use a placeholder to avoid collision with month
+	if strings.Contains(result, ":") {
+		result = strings.ReplaceAll(result, ":mm", ":###MIN###")
+		result = strings.ReplaceAll(result, ":m", ":###MIN1###")
+	}
+
+	// Year patterns (case insensitive handled by lower conversion)
+	result = strings.ReplaceAll(result, "yyyy", "2006")
+	result = strings.ReplaceAll(result, "YYYY", "2006")
+	result = strings.ReplaceAll(result, "yy", "06")
+	result = strings.ReplaceAll(result, "YY", "06")
+
+	// Month patterns
+	result = strings.ReplaceAll(result, "mmmm", "January")
+	result = strings.ReplaceAll(result, "MMMM", "January")
+	result = strings.ReplaceAll(result, "mmm", "Jan")
+	result = strings.ReplaceAll(result, "MMM", "Jan")
+	result = strings.ReplaceAll(result, "mm", "01")
+	result = strings.ReplaceAll(result, "MM", "01")
+	result = strings.ReplaceAll(result, "m", "1")
+	result = strings.ReplaceAll(result, "M", "1")
+
+	// Day patterns
+	result = strings.ReplaceAll(result, "dd", "02")
+	result = strings.ReplaceAll(result, "DD", "02")
+	result = strings.ReplaceAll(result, "d", "2")
+	result = strings.ReplaceAll(result, "D", "2")
+
+	// Hour patterns
+	result = strings.ReplaceAll(result, "hh", "15")
+	result = strings.ReplaceAll(result, "HH", "15")
+	result = strings.ReplaceAll(result, "h", "3")
+	result = strings.ReplaceAll(result, "H", "3")
+
+	// Restore minute patterns
+	result = strings.ReplaceAll(result, ":###MIN###", ":04")
+	result = strings.ReplaceAll(result, ":###MIN1###", ":4")
+
+	// Second patterns
+	result = strings.ReplaceAll(result, "ss", "05")
+	result = strings.ReplaceAll(result, "SS", "05")
+	result = strings.ReplaceAll(result, "s", "5")
+	result = strings.ReplaceAll(result, "S", "5")
+
+	// AM/PM
+	result = strings.ReplaceAll(result, "AM/PM", "PM")
+	result = strings.ReplaceAll(result, "am/pm", "pm")
+
+	return result
 }
 
 type FormulaStringCol struct {

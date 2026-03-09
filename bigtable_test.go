@@ -7,7 +7,7 @@ import (
 )
 
 func TestBigTable(t *testing.T) {
-	xlFile, err := Open("BigTable.xls", "utf-8")
+	xlFile, err := Open("testdata/BigTable.xls", "utf-8")
 	if err != nil {
 		t.Fatalf("Cant open xls file: %s", err)
 	}
